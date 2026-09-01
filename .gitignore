@@ -1,4 +1,6 @@
 node_modules/
-src/
 *.log
 .tmp-*
+src/
+test-*.cjs
+test-*.mjs*
