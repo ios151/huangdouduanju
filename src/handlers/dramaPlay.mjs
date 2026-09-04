@@ -69,17 +69,29 @@ export function modifyDramaPlay(payload, $request) {
 		if (isPreview) {
 			// 试看载荷：is_preview=true 或 URL 含 preview
 			// 只翻标志位不够，播放源还是 preview.mp4，需要注入完整 play.m3u8
-			const cached = $request?.__cachedBody || null;
-			if (cached && cached.id) {
+			// 优先从响应体自身取 drama_id/seq，避免全局缓存时序竞争
+			const dramaId = data.drama_id || data.id;
+			const seq = data.seq;
+			if (dramaId && seq !== undefined) {
 				const host = getHostFromUrl($request?.url);
-				const forged = forgePlayResponse(cached.id, cached.seq || cached.drama_id, host);
+				const forged = forgePlayResponse(dramaId, seq, host);
 				// 用伪造的 data 替换原 data（保留外层 status/time）
 				Object.keys(data).forEach(k => delete data[k]);
 				Object.assign(data, forged.data);
 				changed = true;
 				return changed;
 			}
-			// 没有缓存，退而求其次只翻标志位
+			// 响应体没有 drama_id/seq，尝试从缓存取
+			const cached = $request?.__cachedBody || null;
+			if (cached && cached.id) {
+				const host = getHostFromUrl($request?.url);
+				const forged = forgePlayResponse(cached.id, cached.seq || cached.drama_id, host);
+				Object.keys(data).forEach(k => delete data[k]);
+				Object.assign(data, forged.data);
+				changed = true;
+				return changed;
+			}
+			// 都没有，退而求其次只翻标志位
 			if (data.is_preview !== undefined && data.is_preview !== false && data.is_preview !== "0") {
 				data.is_preview = false;
 				changed = true;
