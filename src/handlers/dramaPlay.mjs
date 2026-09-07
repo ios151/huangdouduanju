@@ -63,8 +63,8 @@ export function modifyDramaPlay(payload, $request) {
 	const data = payload.data && typeof payload.data === "object" ? payload.data : null;
 	if (data) {
 		const isPreview = (data.is_preview !== undefined && data.is_preview !== false && data.is_preview !== "0")
-			|| (typeof data.m3u8 === "string" && data.m3u8.includes("preview"))
-			|| (Array.isArray(data.lines) && data.lines.some(l => typeof l?.url === "string" && l.url.includes("preview")));
+			|| (typeof data.m3u8 === "string" && /\/preview\.(mp4|m3u8)/.test(data.m3u8))
+			|| (Array.isArray(data.lines) && data.lines.some(l => typeof l?.url === "string" && /\/preview\.(mp4|m3u8)/.test(l.url)));
 
 		if (isPreview) {
 			// 试看载荷：is_preview=true 或 URL 含 preview
