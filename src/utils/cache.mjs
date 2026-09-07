@@ -4,6 +4,7 @@ import { decryptResponse } from "./crypto.mjs";
 import { getHeader } from "./headers.mjs";
 
 const CACHE_KEY = "huangdou_play_ctx";
+const COVER_CACHE_KEY = "huangdou_covers";
 
 /**
  * 缓存 play 请求体（在 REQUEST 阶段调用）
@@ -54,6 +55,45 @@ export function getCachedPlayRequest() {
 			return cached;
 		}
 		return null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * 缓存 detail 响应中每集的 cover URL（用于构造 preview URL）
+ * cover URL 格式: https://{cdn}/{batch}/{drama_id}/chapters/{seq}/cover.jpg
+ * preview URL 格式: https://{cdn}/{batch}/{drama_id}/chapters/{seq}/preview.mp4
+ */
+export function cacheCoverUrls(dramaId, episodes) {
+	try {
+		if (!dramaId || !Array.isArray(episodes)) return;
+		const covers = Storage.getItem(COVER_CACHE_KEY, {}) || {};
+		for (const ep of episodes) {
+			if (!ep || ep.seq === undefined || !ep.cover) continue;
+			const key = `${dramaId}_${ep.seq}`;
+			covers[key] = ep.cover;
+		}
+		Storage.setItem(COVER_CACHE_KEY, covers);
+		Console.debug(`[cache] cover URLs 缓存成功: ${Object.keys(covers).length} 条`);
+	} catch (e) {
+		Console.debug(`[cache] cover URLs 缓存失败: ${e}`);
+	}
+}
+
+/**
+ * 获取指定剧集的 preview URL（从 cover URL 转换）
+ * cover.jpg → preview.mp4
+ */
+export function getPreviewUrl(dramaId, seq) {
+	try {
+		const covers = Storage.getItem(COVER_CACHE_KEY, {}) || {};
+		const key = `${dramaId}_${seq}`;
+		const coverUrl = covers[key];
+		if (!coverUrl) return null;
+		// cover.jpg → preview.mp4
+		const previewUrl = String(coverUrl).replace(/\/cover\.[a-z]+$/, "/preview.mp4");
+		return previewUrl !== coverUrl ? previewUrl : null;
 	} catch {
 		return null;
 	}

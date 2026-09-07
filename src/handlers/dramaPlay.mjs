@@ -1,9 +1,15 @@
 // 播放解锁：drama/play
-// 服务器对 VIP 剧返回 {"status":"n","error":"该短剧为 VIP 专享","errorCode":813004}
+// 服务器对付费剧返回 {"status":"n","error":"本集需金币解锁","errorCode":813005}
 // 成功响应包含: lines, drama_id, seq, name, duration, m3u8, preview_m3u8, hls_key, is_preview, preview_seconds
 //
-// 解锁策略：当返回 813004/813005/813006 时，伪造成功响应
-// m3u8 URL 的域名从请求 URL 动态提取，不写死
+// 重要变更：服务器现在对 play.m3u8 URL 添加 exp + sig 签名验证
+// 旧方案伪造 play.m3u8?line=free 已返回 403，无法绕过
+// 新策略：
+//   1. 成功响应：直接透传服务器返回的签名 URL，仅修正 is_preview/preview_seconds
+//   2. 付费错误(813005)：用 detail 缓存的 cover URL 构造 CloudFront preview.mp4 回退
+//   3. 预览响应：保留 preview URL，修正标志位
+
+import { getCachedPlayRequest, getPreviewUrl } from "../utils/cache.mjs";
 
 function getHostFromUrl(url) {
 	try {
@@ -14,9 +20,12 @@ function getHostFromUrl(url) {
 	}
 }
 
-function forgePlayResponse(dramaId, seq, host) {
-	const base = host || "cocoaview.cc";
-	const m3u8Url = `https://${base}/api/drama/hls/${dramaId}/${seq}/play.m3u8?line=free`;
+/**
+ * 用 preview URL 构造回退响应
+ * preview.mp4 在 CloudFront 上无需签名即可访问
+ */
+function forgePreviewResponse(dramaId, seq, previewUrl) {
+	if (!previewUrl) return null;
 	return {
 		status: "y",
 		data: {
@@ -24,11 +33,11 @@ function forgePlayResponse(dramaId, seq, host) {
 			duration: 0,
 			hls_key: "",
 			lines: [
-				{ name: "free", url: m3u8Url },
+				{ id: "0", lid: "0", code: "free", name: "free", m3u8_url: previewUrl, url: previewUrl },
 			],
-			m3u8: m3u8Url,
+			m3u8: previewUrl,
 			name: String(seq),
-			preview_m3u8: "",
+			preview_m3u8: previewUrl,
 			seq: Number(seq) || seq,
 			is_preview: false,
 			preview_seconds: 0,
@@ -41,21 +50,25 @@ export function modifyDramaPlay(payload, $request) {
 	if (!payload || typeof payload !== "object") return false;
 	let changed = false;
 
-	// 如果是付费错误响应，伪造成功
+	// 付费错误响应：尝试用 preview URL 回退
 	const payErrorCodes = [813004, 813005, 813006, 813103, "813004", "813005", "813006", "813103"];
 	if (payload.status === "n" && payErrorCodes.includes(payload.errorCode)) {
-		// 从缓存获取 drama_id 和 seq
-		const cached = $request?.__cachedBody || null;
-		if (cached && cached.id) {
-			const host = getHostFromUrl($request?.url);
-			const forged = forgePlayResponse(cached.id, cached.seq || cached.drama_id, host);
-			// 替换整个 payload
-			Object.keys(payload).forEach(k => delete payload[k]);
-			Object.assign(payload, forged);
-			changed = true;
-			return changed;
+		const cached = $request?.__cachedBody || getCachedPlayRequest() || null;
+		const dramaId = cached?.id || cached?.drama_id || "";
+		const seq = cached?.seq || "";
+		if (dramaId && seq) {
+			const previewUrl = getPreviewUrl(dramaId, seq);
+			if (previewUrl) {
+				const forged = forgePreviewResponse(dramaId, seq, previewUrl);
+				if (forged) {
+					Object.keys(payload).forEach(k => delete payload[k]);
+					Object.assign(payload, forged);
+					changed = true;
+					return changed;
+				}
+			}
 		}
-		// 没有缓存，透传原响应
+		// 没有 preview URL，透传原响应
 		return false;
 	}
 
@@ -67,31 +80,7 @@ export function modifyDramaPlay(payload, $request) {
 			|| (Array.isArray(data.lines) && data.lines.some(l => typeof l?.url === "string" && /\/preview\.(mp4|m3u8)/.test(l.url)));
 
 		if (isPreview) {
-			// 试看载荷：is_preview=true 或 URL 含 preview
-			// 只翻标志位不够，播放源还是 preview.mp4，需要注入完整 play.m3u8
-			// 优先从响应体自身取 drama_id/seq，避免全局缓存时序竞争
-			const dramaId = data.drama_id || data.id;
-			const seq = data.seq;
-			if (dramaId && seq !== undefined) {
-				const host = getHostFromUrl($request?.url);
-				const forged = forgePlayResponse(dramaId, seq, host);
-				// 用伪造的 data 替换原 data（保留外层 status/time）
-				Object.keys(data).forEach(k => delete data[k]);
-				Object.assign(data, forged.data);
-				changed = true;
-				return changed;
-			}
-			// 响应体没有 drama_id/seq，尝试从缓存取
-			const cached = $request?.__cachedBody || null;
-			if (cached && cached.id) {
-				const host = getHostFromUrl($request?.url);
-				const forged = forgePlayResponse(cached.id, cached.seq || cached.drama_id, host);
-				Object.keys(data).forEach(k => delete data[k]);
-				Object.assign(data, forged.data);
-				changed = true;
-				return changed;
-			}
-			// 都没有，退而求其次只翻标志位
+			// 试看载荷：保留 preview URL 但修正标志位让播放器完整播放
 			if (data.is_preview !== undefined && data.is_preview !== false && data.is_preview !== "0") {
 				data.is_preview = false;
 				changed = true;

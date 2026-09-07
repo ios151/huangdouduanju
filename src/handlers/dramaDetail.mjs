@@ -3,6 +3,8 @@
 //   episode.type='free' + episode.is_buy=true → 前端 ans()=false → 不弹窗直接发 play
 //   不能改成 coin/points（会弹金币/积分窗），也不能保留 vip（弹会员窗）
 
+import { cacheCoverUrls } from "../utils/cache.mjs";
+
 function unlockEpisode(ep) {
 	if (!ep || typeof ep !== "object") return false;
 	let changed = false;
@@ -145,6 +147,16 @@ export function modifyDramaDetail(payload) {
 	if (!payload || typeof payload !== "object") return false;
 	let changed = false;
 	const data = payload.data && typeof payload.data === "object" ? payload.data : payload;
+
+	// 缓存 cover URL（用于 play 回退 preview URL）
+	try {
+		const dramaId = data.drama_id || data.id || "";
+		const episodes = data.episodes || data.list || data.items || data.episode_list;
+		if (dramaId && Array.isArray(episodes)) {
+			cacheCoverUrls(dramaId, episodes);
+		}
+	} catch {}
+
 	changed = unlockDrama(data) || changed;
 	changed = unlockDrama(payload) || changed;
 	return changed;
